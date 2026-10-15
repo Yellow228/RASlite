@@ -84,7 +84,10 @@ def read_plan_hdf(path: str, to_si: bool = True):
         off, cnt = int(se_info[i][0]), int(se_info[i][1])
         pts = [(float(x) * L, float(z) * L) for x, z in se_vals[off:off + cnt]]
         noff, ncnt = int(n_info[i][0]), int(n_info[i][1])
-        nzones = [(float(s) * L, float(n)) for s, n in n_vals[noff:noff + ncnt]]
+        # 过滤哨兵值: HEC-RAS 用 float32 max 表示未定义 n (滩地无定义时),
+        # n<=0 亦为占位垃圾 (如 Bank Sta 与断面端重合时的 0 值条目)
+        nzones = [(float(s) * L, float(n)) for s, n in n_vals[noff:noff + ncnt]
+                  if 0.0 < float(n) < 1e30]
         bl, br = float(row[8]) * L, float(row[9]) * L
 
         # n 值按滩肩拆分: <bl -> 左滩; bl<=x<br -> 主槽; >=br -> 右滩
@@ -110,8 +113,8 @@ def read_plan_hdf(path: str, to_si: bool = True):
             n_main=n_main, n_left=n_left or 0.0, n_right=n_right or 0.0,
             # Attributes 字段序: 5=Len Left, 6=Len Channel, 7=Len Right,
             #                    11=Contr, 12=Expan (13=HP Count 勿用!)
-            reach_lengths=(float(row[5]) * L, float(row[6]) * L,
-                           float(row[7]) * L),
+            reach_lengths=(_nz(float(row[5])) * L, _nz(float(row[6])) * L,
+                           _nz(float(row[7])) * L),
             c_contract=float(row[11]), c_expand=float(row[12]),
             results={},
         ))
@@ -188,6 +191,11 @@ def read_plan_hdf(path: str, to_si: bool = True):
     return sections, profiles, meta
 
 
+def _nz(v: float) -> float:
+    """NaN (无滩地时的河段长度) -> 0"""
+    return 0.0 if v != v else v
+
+
 def read_flow_file(path: str, to_si: bool = True):
     """解析 HEC-RAS 稳定流流量文件 (.f01)。
 
@@ -221,6 +229,8 @@ def read_flow_file(path: str, to_si: bool = True):
                 cur_bnd = boundaries.setdefault(key, {})
             elif line.startswith("Up Type=") and cur_bnd is not None:
                 cur_bnd["up_type"] = int(line.split("=")[1])
+            elif line.startswith("Up Slope=") and cur_bnd is not None:
+                cur_bnd["up_slope"] = float(line.split("=")[1])
             elif line.startswith("Dn Type=") and cur_bnd is not None:
                 cur_bnd["dn_type"] = int(line.split("=")[1])
             elif line.startswith("Dn Slope=") and cur_bnd is not None:

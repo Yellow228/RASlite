@@ -88,10 +88,16 @@ HEC-RAS 打开算例 Compute 一次），构建 Fall River 7 断面模型（含�
 汇合口处理：HEC-RAS junction 能量法的汇合口摩擦长度取自 Junction Information
 （EX1 为 60ft），脚本中按此设置；通用 junction 模块在二期实现。
 
+## L2 验证：混合流（MIXED 官方算例，已通过）
+
+`regime="mixed"`：亚临界遍（自下游）+ 超临界遍（自上游）+ 比力 SF 合并
+（复刻 HEC-RAS Mixed Flow 算法）。MIXED 官方算例（矩形渠 20ft、陡坡接缓坡、
+两剖面 500/1000 cfs）对比：**最大 |ΔWS| = 0.22 cm，水跃位置与 HEC-RAS
+完全一致**（报告：`L2_验证报告_MIXED.md`，脚本：`scripts/mixed_l2.py`）。
+
 ## v1 已知局限（二期计划）
 
 - 无桥/涵/堰等建筑物（二期）
-- 无混合流比力判别（二期）
 - 无无效流动区（ineffective flow areas）（二期）
 - 无 HEC-RAS 几何文件（.g01）导入器（二期，格式已勘察）
 - 复式断面多重临界水深取最浅解，与 HEC-RAS 比能最小法可能略有差异

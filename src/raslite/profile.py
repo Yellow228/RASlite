@@ -56,6 +56,8 @@ class SectionResult:
     alpha: float = 1.0
     top_width: float = 0.0
     froude: float = 0.0
+    y_centroid: float = 0.0
+    defaulted_critical: bool = False   # 迭代不收敛/超界 -> 默认取临界水深
     warnings: list = field(default_factory=list)
 
     @property
@@ -65,6 +67,15 @@ class SectionResult:
     @property
     def critical_depth(self) -> float:
         return self.crit_ws - self.section.z_min
+
+
+def specific_force(p, q: float) -> float:
+    """比力 SF = beta*Q^2/(gA) + A*Ybar (HEC-RAS Mixed Flow 判别式)。
+    p 为 SectionProps 或 SectionResult; beta 按同 alpha 公式取值。"""
+    area = p.area
+    ybar = getattr(p, "y_centroid", 0.0)
+    alpha = getattr(p, "alpha", 1.0)
+    return alpha * q * q / (G * area) + area * ybar
 
 
 def _sbar(method: str, q_us: float, q_ds: float, k1: float, k2: float,
@@ -104,8 +115,8 @@ class SteadyProfile:
     def __init__(self, sections, q, regime="subcritical", boundary=("ws",),
                  sbar_method="avg_conveyance", tol=_TOL_DEFAULT,
                  max_iter=_MAX_ITER_DEFAULT):
-        if regime not in ("subcritical", "supercritical"):
-            raise ValueError("regime 必须为 subcritical / supercritical")
+        if regime not in ("subcritical", "supercritical", "mixed"):
+            raise ValueError("regime 必须为 subcritical / supercritical / mixed")
         if sbar_method not in SBAR_METHODS:
             raise ValueError(f"sbar_method 必须为 {SBAR_METHODS}")
         for s in sections:
@@ -127,18 +138,19 @@ class SteadyProfile:
 
     # ---------------- 边界条件 ----------------
 
-    def _boundary_ws(self, sec: CrossSection, q: float) -> float:
-        kind = self.boundary[0]
+    def _boundary_ws(self, sec: CrossSection, q: float, boundary=None) -> float:
+        boundary = boundary if boundary is not None else self.boundary
+        kind = boundary[0]
         if kind == "ws":
-            return float(self.boundary[1])
+            return float(boundary[1])
         if kind == "critical":
             ws, _ = critical_ws(sec, q)
             return ws
         if kind == "normal":
             from .hydraulics import normal_ws
-            return normal_ws(sec, q, float(self.boundary[1]))
+            return normal_ws(sec, q, float(boundary[1]))
         if kind == "rating":
-            return float(self.boundary[1](q))
+            return float(boundary[1](q))
         raise ValueError(f"未知边界条件类型: {kind}")
 
     # ---------------- 河段长度与损失 ----------------
@@ -161,10 +173,11 @@ class SteadyProfile:
         return num / den
 
     def _iterate(self, sec_known, p_known, sec_unknown,
-                 q_known: float, q_unknown: float):
+                 q_known: float, q_unknown: float, regime=None):
         """标准步进迭代。返回 (SectionResult, SectionProps)。"""
+        regime = regime or self.regime
         # 成对断面的上游断面及其系数 (HEC-RAS 约定)
-        if self.regime == "subcritical":
+        if regime == "subcritical":
             sec_us = sec_unknown          # known=下游, unknown=上游
         else:
             sec_us = sec_known            # known=上游, unknown=下游
@@ -172,7 +185,7 @@ class SteadyProfile:
         def ws_calc_of(ws_guess: float):
             p = sec_unknown.props(ws_guess)
             # 上/下游 props 与各自断面流量
-            if self.regime == "subcritical":
+            if regime == "subcritical":
                 p_us, p_ds = p, p_known
                 q_us, q_ds = q_unknown, q_known
                 sec_L = sec_unknown
@@ -193,7 +206,7 @@ class SteadyProfile:
             else:
                 c = sec_us.c_expand
             he = L * sbar + c * abs(hv_ds - hv_us)
-            if self.regime == "subcritical":
+            if regime == "subcritical":
                 h_new = p_known.total_head_of(q_known) + he
             else:
                 h_new = p_known.total_head_of(q_known) - he
@@ -246,8 +259,9 @@ class SteadyProfile:
                     warns.append(
                         f"迭代 {self.max_iter} 次未收敛 (最后误差 "
                         f"{abs(el):.4f} m), 默认取临界水深 {cw:.3f}")
-                    return self._make_result(sec_unknown, cw, p_c,
-                                             q_unknown, warns), p_c
+                    res = self._make_result(sec_unknown, cw, p_c,
+                                            q_unknown, warns, defaulted=True)
+                    return res, p_c
 
         # ---- 临界水深校核与默认处理 ----
         warns = []
@@ -257,21 +271,25 @@ class SteadyProfile:
             cw = None
             warns.append(f"临界水深求解失败 ({e})")
         if cw is not None:
-            if self.regime == "subcritical" and ws_final < cw - 1e-9:
+            defaulted = False
+            if regime == "subcritical" and ws_final < cw - 1e-9:
                 warns.append(
                     f"计算水位 {ws_final:.3f} 低于临界 {cw:.3f}, "
                     f"默认取临界水深 (亚临界)")
                 ws_final, p_final = cw, sec_unknown.props(cw)
-            elif self.regime == "supercritical" and ws_final > cw + 1e-9:
+                defaulted = True
+            elif regime == "supercritical" and ws_final > cw + 1e-9:
                 warns.append(
                     f"计算水位 {ws_final:.3f} 高于临界 {cw:.3f}, "
                     f"默认取临界水深 (超临界)")
                 ws_final, p_final = cw, sec_unknown.props(cw)
+                defaulted = True
 
         return self._make_result(sec_unknown, ws_final, p_final,
-                                 q_unknown, warns), p_final
+                                 q_unknown, warns, defaulted), p_final
 
-    def _make_result(self, sec, ws, p, q, warns) -> SectionResult:
+    def _make_result(self, sec, ws, p, q, warns,
+                     defaulted=False) -> SectionResult:
         try:
             cw, _ = critical_ws(sec, q)
         except Exception:
@@ -282,31 +300,25 @@ class SteadyProfile:
             hv=p.velocity_head_of(q), total_head=p.total_head_of(q),
             conveyance=p.conveyance, alpha=p.alpha,
             top_width=p.top_width, froude=math.sqrt(p.froude_sq_of(q)),
+            y_centroid=p.y_centroid, defaulted_critical=defaulted,
             warnings=warns,
         )
 
     # ---------------- 主流程 ----------------
 
-    def run(self):
-        """返回 [SectionResult, ...], 按推算顺序排列 (边界断面在前)。"""
+    def _run_pass(self, regime: str, boundary):
+        """单一流态一遍推算 (供 mixed 调用或单流态 run 使用)。"""
         secs = self.sections
-        if len(secs) < 2:
-            raise ValueError("至少需要 2 个断面")
-
-        if self.regime == "subcritical":
+        if regime == "subcritical":
             order = list(reversed(secs))     # 最下游起, 向上游推
         else:
             order = list(secs)               # 最上游起, 向下游推
 
-        # 各断面的流量 (与排序后的 sections 对齐)
-        if not hasattr(self, "qs") or len(self.qs) != len(secs):
-            base = getattr(self, "qs", [self.q])
-            self.qs = [base[0]] * len(secs) if len(base) == 1 else base
         q_by_sec = {id(s): q for s, q in zip(secs, self.qs)}
 
         sec0 = order[0]
         q0 = q_by_sec[id(sec0)]
-        ws0 = self._boundary_ws(sec0, q0)
+        ws0 = self._boundary_ws(sec0, q0, boundary)
         p0 = sec0.props(ws0)
         results = [self._make_result(sec0, ws0, p0, q0, [])]
 
@@ -314,6 +326,69 @@ class SteadyProfile:
         for i in range(1, len(order)):
             res, p_known = self._iterate(order[i - 1], p_known, order[i],
                                          q_by_sec[id(order[i - 1])],
-                                         q_by_sec[id(order[i])])
+                                         q_by_sec[id(order[i])], regime)
             results.append(res)
         return results
+
+    def _merge_mixed(self, sub_res, sup_res):
+        """HEC-RAS 混合流合并算法:
+        1) 亚临界遍 (自下游边界) 与超临界遍 (自上游边界) 均已完成;
+        2) 自上游向下游: 有超临界解时比较比力 SF, 大者控制;
+        3) 亚临界 SF 反超 -> 判定水跃发生在上一断面与本章之间, 转入
+           亚临界区;
+        4) 亚临界区内遇到"默认临界水深"的断面 -> 流态转回超临界。
+        返回按 US->DS 顺序的最终结果。"""
+        sub_by = {id(r.section): r for r in sub_res}
+        sup_by = {id(r.section): r for r in sup_res}
+
+        finals = []
+        mode = "super"
+        jump_i = None
+        for i, sec in enumerate(self.sections):     # US -> DS
+            sub = sub_by[id(sec)]
+            sup = sup_by.get(id(sec))
+            if mode == "super":
+                if sup is not None and not sup.defaulted_critical:
+                    sf_s = specific_force(sup, sup.q)
+                    sf_b = specific_force(sub, sub.q)
+                    if sf_s >= sf_b:
+                        finals.append(sup)
+                        continue
+                    # 亚临界比力反超 -> 水跃
+                    jump_i = i
+                    mode = "sub"
+                    sub.warnings.append(
+                        f"水跃判定: 亚临界比力 {sf_b:.3f} > 超临界比力 "
+                        f"{sf_s:.3f}, 水跃位于本章与上一断面之间")
+                    finals.append(sub)
+                else:
+                    # 超临界遍在该断面无有效解 (默认临界) -> 用亚临界遍
+                    finals.append(sub)
+                    mode = "sub"
+            else:
+                if sub.defaulted_critical and sup is not None \
+                        and not sup.defaulted_critical:
+                    finals.append(sup)
+                    mode = "super"
+                else:
+                    finals.append(sub)
+        return finals
+
+    def run(self):
+        """返回 [SectionResult, ...]。
+
+        单流态: 按推算顺序排列 (边界断面在前)。
+        mixed: boundary = (下游边界元组, 上游边界元组), 返回 US->DS 顺序,
+        内部先亚临界遍 (自下游) 再超临界遍 (自上游), 按比力合并定位水跃。
+        """
+        secs = self.sections
+        if len(secs) < 2:
+            raise ValueError("至少需要 2 个断面")
+
+        if self.regime == "mixed":
+            ds_b, us_b = self.boundary
+            sub_res = self._run_pass("subcritical", ds_b)
+            sup_res = self._run_pass("supercritical", us_b)
+            return self._merge_mixed(sub_res, sup_res)
+
+        return self._run_pass(self.regime, self.boundary)
