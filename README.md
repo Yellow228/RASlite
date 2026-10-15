@@ -132,6 +132,10 @@ python tests/run_all.py
 - HEC-RAS Reference Manual / 1D Technical Reference（HEC 官网免费公开）
 - 相关算例下载：HEC-RAS 7.0 Example Projects（HEC 官网）
 
+## 许可证
+
+[MIT](LICENSE) — 可自由使用、修改与分发，需保留版权声明；软件按"现状"提供，不含任何担保。
+
 ## 免责声明
 
 本程序用于工程学习与研究。虽已通过与 HEC-RAS 6.2 的逐断面对比验证，
