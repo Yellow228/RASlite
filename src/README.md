@@ -95,9 +95,22 @@ HEC-RAS 打开算例 Compute 一次），构建 Fall River 7 断面模型（含�
 两剖面 500/1000 cfs）对比：**最大 |ΔWS| = 0.22 cm，水跃位置与 HEC-RAS
 完全一致**（报告：`L2_验证报告_MIXED.md`，脚本：`scripts/mixed_l2.py`）。
 
+## L2 验证：河网 + Junction（EX1 全模型，已通过）
+
+`raslite/network.py`：`Reach`（河段）+ `Junction`（汇合口，各入流河段带
+汇合口长度）+ `SteadyNetwork`（亚临界河网解算）。汇合口按 HEC-RAS
+"reach-by-reach 能量平衡"处理：入流末断面与出流首断面之间做配对能量步
+（长度 = 该入流河段的汇合口长度，只计摩擦）。
+
+EX1 全模型（Butte Cr. + Fall River Upper → Junction Sutter → Lower，
+10 断面，三个重现期剖面）：**最大 |ΔWS| = 0.63 cm**（出流河段 ≤0.07cm）。
+脚本：`scripts/ex1_network_l2.py`。
+
 ## v1 已知局限（二期计划）
 
 - 无桥/涵/堰等建筑物（二期）
+- 河网仅支持亚临界过汇合口；超临界过汇合口需动量法（二期）
+- junction 长度目前需人工给定（g01 解析器自动读取在二期）
 - 无无效流动区（ineffective flow areas）（二期）
 - 无 HEC-RAS 几何文件（.g01）导入器（二期，格式已勘察）
 - 复式断面多重临界水深取最浅解，与 HEC-RAS 比能最小法可能略有差异
