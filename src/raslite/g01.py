@@ -38,7 +38,7 @@ def read_prj_units(prj_path: str) -> str:
         for line in f:
             if line.startswith("English Units"):
                 return "ft"
-            if line.startswith("Metric Units"):
+            if line.startswith("Metric Units") or line.startswith("SI Units"):
                 return "m"
     return "ft"   # HEC-RAS 历史默认
 
@@ -166,7 +166,8 @@ def parse_g01(path: str, unit: str = "ft"):
                                   f"RS={parts[1]}) — v1 不支持桥涵等建筑物")
                     cur_node = None
                     continue
-                lengths = tuple(float(v) * L for v in parts[2:5])
+                lengths = tuple(
+                    (float(v) if v.strip() else 0.0) * L for v in parts[2:5])
                 cur_node = G01Section(
                     rs=parts[1], points=[], bank_left=0.0, bank_right=0.0,
                     n_main=0.0, n_left=[], n_right=[],

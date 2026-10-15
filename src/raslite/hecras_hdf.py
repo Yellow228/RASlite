@@ -104,7 +104,7 @@ def read_plan_hdf(path: str, to_si: bool = True):
         # 保留原列表 (geometry._norm_n_zones 按 HEC-RAS 语义解析)
 
         friction_mode = _s(row[10])
-        if friction_mode != "Basic Mann n":
+        if friction_mode not in ("Basic Mann n", "Horiz Mann n"):
             raise NotImplementedError(f"暂不支持摩阻模式: {friction_mode}")
 
         sections.append(HecrasSection(

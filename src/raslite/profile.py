@@ -214,6 +214,11 @@ class SteadyProfile:
 
         # ---- 试值序列 (HEC-RAS 策略) ----
         z1, z2 = sec_known.z_min, sec_unknown.z_min
+        # 限幅上界: 封闭断面取顶高程; 开放断面不设上界
+        if sec_unknown.z_max > sec_unknown.z_min + 1e-3:
+            g_hi = sec_unknown.z_max - 1e-6
+        else:
+            g_hi = float("inf")
         g1 = z2 + (p_known.ws - z1)                 # 试值1: 水深投影
         c1, p1 = ws_calc_of(g1)
         err1 = c1 - g1
@@ -221,6 +226,7 @@ class SteadyProfile:
             ws_final, p_final = c1, p1
         else:
             g2 = g1 + 0.70 * err1                   # 试值2: 0.7 倍误差修正
+            g2 = min(max(g2, z2 + max(1e-6, abs(z2) * 1e-9)), g_hi)
             c2, p2 = ws_calc_of(g2)
             err2 = c2 - g2
             if abs(err2) <= self.tol:
@@ -229,16 +235,14 @@ class SteadyProfile:
                 ws_final, p_final = None, None
                 gu, gl = g1, g2                     # 旧/新试值
                 eu, el = err1, err2
-                # 限幅上界: 封闭断面取顶高程; 开放断面不设上界
-                if sec_unknown.z_max > sec_unknown.z_min + 1e-3:
-                    g_hi = sec_unknown.z_max - 1e-6
-                else:
-                    g_hi = float("inf")
                 for _ in range(self.max_iter - 2):
                     if abs(el - eu) < 1e-15:
                         break
                     gn = gl - el * (gl - gu) / (el - eu)   # 割线法 (式 2-18)
-                    gn = min(max(gn, sec_unknown.z_min + 1e-9), g_hi)
+                    # 下限留出量纲匹配的裕量, 避免极浅水深面积下溢
+                    gn = min(max(gn, sec_unknown.z_min
+                                 + max(1e-6, abs(sec_unknown.z_min) * 1e-9)),
+                             g_hi)
                     cn, pn = ws_calc_of(gn)
                     en = cn - gn
                     if abs(en) <= self.tol:
@@ -319,8 +323,24 @@ class SteadyProfile:
         sec0 = order[0]
         q0 = q_by_sec[id(sec0)]
         ws0 = self._boundary_ws(sec0, q0, boundary)
+        # 边界水位低于/高于临界 -> HEC-RAS 行为: 默认取临界水深
+        boundary_warns = []
+        try:
+            cw0, _ = critical_ws(sec0, q0)
+            if regime == "subcritical" and ws0 < cw0 - 1e-9:
+                boundary_warns.append(
+                    f"边界水位 {ws0:.3f} 低于临界 {cw0:.3f}, "
+                    f"默认取临界水深 (亚临界)")
+                ws0 = cw0
+            elif regime == "supercritical" and ws0 > cw0 + 1e-9:
+                boundary_warns.append(
+                    f"边界水位 {ws0:.3f} 高于临界 {cw0:.3f}, "
+                    f"默认取临界水深 (超临界)")
+                ws0 = cw0
+        except Exception:
+            pass
         p0 = sec0.props(ws0)
-        results = [self._make_result(sec0, ws0, p0, q0, [])]
+        results = [self._make_result(sec0, ws0, p0, q0, boundary_warns)]
 
         p_known = p0
         for i in range(1, len(order)):
