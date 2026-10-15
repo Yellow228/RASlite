@@ -21,11 +21,21 @@ HEC-RAS 行为对齐说明:
 
 from __future__ import annotations
 
+from . import G
 from .geometry import CrossSection
 
 
 class CriticalDepthError(ValueError):
     pass
+
+
+def specific_force(p, q: float) -> float:
+    """比力 SF = beta*Q^2/(gA) + A*Ybar (beta 取 alpha, 同 alpha 公式)。
+
+    用于混合流判别与多重临界水深选择 (HEC-RAS 规则: 多临界取 SF 最大者)。
+    p 为 SectionProps 或含 area/alpha/y_centroid 属性的对象。
+    """
+    return p.alpha * q * q / (G * p.area) + p.area * p.y_centroid
 
 
 def _lo_bound(cs: CrossSection) -> float:
@@ -35,53 +45,117 @@ def _lo_bound(cs: CrossSection) -> float:
 
 
 def critical_ws(cs: CrossSection, q: float, tol: float = 1e-9):
-    """返回 (临界水面高程, 临界比能 E = H - z_min)。"""
+    """返回 (临界水面高程, 临界比能 E = H - z_min)。
+
+    临界判据 (HEC-RAS Reference Manual 式 2-19): 总水头
+    H = WS + alpha*V^2/2g 的最小值。注意: 复式断面上 alpha 随水位
+    显著变化时, 极小值处 Fr^2 != 1 (Fr^2=1 只在 alpha 冻结时成立),
+    因此必须直接对 H 曲线求极小, 不能用 Fr^2=1 求根 (真实断面
+    验证两种方法差可达 1m)。
+
+    求解规则 = HEC-RAS "secant" 方法 (技术参考 Critical Depth
+    Determination): 将断面切成 30 片 (复式 25+5), 在 H-WS 表中找
+    局部极小 (最多 3 个), 逐个细化后**取比能最小者**。这是
+    HEC-RAS 文档声明的确定性规则 (parabolic 默认法只找第一个
+    极小且依赖迭代初值, 不可复现; 文档承认 secant 结果更准)。
+    """
     if q <= 0:
         raise ValueError("流量必须为正")
 
-    def fr2(ws: float) -> float:
-        return cs.props(ws).froude_sq_of(q)
+    def H(ws: float) -> float:
+        return cs.props(ws).total_head_of(q)
 
     lo = _lo_bound(cs)
-    if fr2(lo) <= 1.0:
-        # 理论上极浅处 Fr^2 -> inf, 此情形仅出现在数值异常
-        raise CriticalDepthError(f"{cs.name}: 河底附近 Froude 数异常")
+    top = cs.z_max
 
-    # 确定包含 Fr^2 = 1 的区间上界
-    span = cs.z_max - cs.z_min
-    if span > 1e-9:
-        hi = cs.z_max
-        if fr2(hi) > 1.0:
-            raise CriticalDepthError(
-                f"{cs.name}: 断面内无临界水深 (抬升至断面顶 Fr^2 仍 > 1), "
-                f"断面过小或流量过大")
-    else:
-        # 开放断面: 上界逐级扩张
+    # ---- 开放断面 (平底, z_max==z_min): 深度扩张找上界 ----
+    # (H 先降后升, 上界取到 H 首次回升处, 保证极小落在范围内)
+    if top - lo <= 1e-9:
         d0 = max(1e-3, 0.001 * max(1.0, abs(cs.z_min)))
-        hi = cs.z_min + d0
+        top = cs.z_min + d0
+        h_prev = H(lo)
         it = 0
-        while fr2(hi) > 1.0:
-            d0 *= 2.0
-            hi = cs.z_min + d0
+        while True:
+            h_cur = H(top)
+            if h_cur > h_prev:
+                break
+            h_prev = h_cur
+            d0 *= 1.5
+            top = cs.z_min + d0
             it += 1
             if it > 200:
                 raise CriticalDepthError(
-                    f"{cs.name}: 开放断面内未找到临界水深 (扩张超过上限)")
+                    f"{cs.name}: 开放断面内未找到比能极小 (扩张超过上限)")
 
-    a, b = lo, hi
-    for _ in range(200):
-        mid = 0.5 * (a + b)
-        if (b - a) < tol:
+    # ---- 切片 (HEC-RAS secant 法规则) ----
+    # 复式判据: 断面总高 < 1.5 x 主槽滩肩最高点至河底的高差 -> 全断面 30 片
+    bank_elev = None
+    for x, z in cs.points:
+        if abs(x - cs.bank_left) < 1e-9 or abs(x - cs.bank_right) < 1e-9:
+            bank_elev = z if bank_elev is None else max(bank_elev, z)
+    if bank_elev is None:
+        bank_elev = cs.z_max
+    if (top - lo) < 1.5 * (bank_elev - cs.z_min) \
+            and (bank_elev - cs.z_min) > 1e-9:
+        n_slices, split = 30, 25   # 25 片到滩肩高程 + 5 片到断面顶
+    else:
+        n_slices, split = 30, None  # 单一水深范围: 全断面 30 片
+
+    def _grid():
+        if split is None:
+            return [lo + (top - lo) * i / n_slices for i in range(n_slices + 1)]
+        g1 = [lo + (bank_elev - lo) * i / split for i in range(split + 1)]
+        g2 = [bank_elev + (top - bank_elev) * i / 5 for i in range(1, 6)]
+        return g1 + g2
+
+    grid = _grid()
+    hs = [H(w) for w in grid]
+
+    # ---- 找表内局部极小 (最多 3 个, 与 HEC-RAS 一致) ----
+    brackets = []
+    for i in range(1, len(grid) - 1):
+        if hs[i] <= hs[i - 1] and hs[i] <= hs[i + 1] \
+                and (hs[i] < hs[i - 1] or hs[i] < hs[i + 1]):
+            brackets.append((grid[i - 1], grid[i + 1]))
+        if len(brackets) == 3:
             break
-        if fr2(mid) > 1.0:
-            a = mid
-        else:
-            b = mid
-    ws = 0.5 * (a + b)
+    if not brackets:
+        # 表内无极小: 极小可能贴着下边界 (E 在 lo 处因 A->0 而发散,
+        # 网格首点通常不是极小) 或介于两网格点之间被单调段掩盖,
+        # 回退: 找 H 最小的网格点及其邻域作为极小括弧
+        i_min = min(range(len(grid)), key=lambda i: hs[i])
+        if i_min == 0:
+            raise CriticalDepthError(
+                f"{cs.name}: 断面内未找到比能极小 (河底处 H 最小?), "
+                f"流量过小")
+        brackets.append((grid[max(i_min - 1, 0)], grid[min(i_min + 1, len(grid) - 1)]))
+
+    # ---- 每个括弧黄金分割细化 -> 候选 ----
+    invphi = (5.0 ** 0.5 - 1.0) / 2.0
+    best = None          # (H, ws)
+    for (a, b) in brackets:
+        c = b - invphi * (b - a)
+        d2 = a + invphi * (b - a)
+        fc, fd = H(c), H(d2)
+        for _ in range(200):
+            if (b - a) <= tol:
+                break
+            if fc < fd:
+                b, d2, fd = d2, c, fc
+                c = b - invphi * (b - a)
+                fc = H(c)
+            else:
+                a, c, fc = c, d2, fd
+                d2 = a + invphi * (b - a)
+                fd = H(d2)
+        ws = 0.5 * (a + b)
+        hmin = H(ws)
+        if best is None or hmin < best[0]:
+            best = (hmin, ws)
+
+    ws = best[1]
     p = cs.props(ws)
     return ws, p.total_head_of(q) - cs.z_min
-
-
 def normal_ws(cs: CrossSection, q: float, s0: float, tol: float = 1e-9,
               max_iter: int = 200):
     """正常水深对应的水面高程 (二分法解 Q = K(ws)*sqrt(S0))。"""

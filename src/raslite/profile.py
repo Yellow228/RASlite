@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 
 from . import G
 from .geometry import CrossSection
-from .hydraulics import critical_ws
+from .hydraulics import critical_ws, specific_force
 
 _TOL_DEFAULT = 0.003    # 0.01 ft
 _MAX_ITER_DEFAULT = 40
@@ -67,15 +67,6 @@ class SectionResult:
     @property
     def critical_depth(self) -> float:
         return self.crit_ws - self.section.z_min
-
-
-def specific_force(p, q: float) -> float:
-    """比力 SF = beta*Q^2/(gA) + A*Ybar (HEC-RAS Mixed Flow 判别式)。
-    p 为 SectionProps 或 SectionResult; beta 按同 alpha 公式取值。"""
-    area = p.area
-    ybar = getattr(p, "y_centroid", 0.0)
-    alpha = getattr(p, "alpha", 1.0)
-    return alpha * q * q / (G * area) + area * ybar
 
 
 def _sbar(method: str, q_us: float, q_ds: float, k1: float, k2: float,

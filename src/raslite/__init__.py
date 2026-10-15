@@ -13,7 +13,8 @@ G = 9.80665  # 重力加速度 m/s2
 
 from .geometry import CrossSection
 from .hydraulics import critical_ws, normal_ws, froude_squared
-from .profile import SteadyProfile, SectionResult, specific_force
+from .profile import SteadyProfile, SectionResult
+from .hydraulics import specific_force
 from .network import Reach, Junction, SteadyNetwork
 
 __all__ = [
