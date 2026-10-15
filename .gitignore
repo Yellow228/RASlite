@@ -1,0 +1,14 @@
+# raslite gitignore
+.venv/
+.workbuddy/
+
+# 官方算例包 (427MB, 可从 HEC 官网重新下载, 见 docs/资料下载地址清单.md)
+Example_Projects_7_0.zip
+examples/
+
+# HEC-RAS 大型二进制 (PDF 手册可从官网链接重新下载)
+docs/*.pdf
+docs/*.zip
+
+__pycache__/
+*.pyc
