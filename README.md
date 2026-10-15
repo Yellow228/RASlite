@@ -84,7 +84,7 @@ for r in net.run_subcritical()["River 1/Reach 1"]:
 
 更多用例见 [`src/README.md`](src/README.md)、
 [`scripts/`](scripts/) 下的验证脚本（test01~test05、EX1 官方算例），
-验证报告见根目录 `L2_验证报告_*.md`。
+验证报告由各对比脚本运行时本地生成（`L2_验证报告_*.md`，不入库）。
 
 ## 项目结构
 
