@@ -106,11 +106,20 @@ EX1 全模型（Butte Cr. + Fall River Upper → Junction Sutter → Lower，
 10 断面，三个重现期剖面）：**最大 |ΔWS| = 0.63 cm**（出流河段 ≤0.07cm）。
 脚本：`scripts/ex1_network_l2.py`。
 
+## L2 验证：g01 几何导入器（EX1 全模型，已通过）
+
+`raslite/g01.py`：`parse_g01` 解析 HEC-RAS 几何文件（断面站距-高程、糙率
+分区、滩肩、河段长度、收缩/扩散系数、汇合口及其长度），`build_network`
+一步转成 `SteadyNetwork`（chainage 自上游累计）。单位从 `.prj`
+（English/Metric Units）自动识别。EX1 全模型改用 g01 导入后：
+**最大 |ΔWS| = 0.42 cm**（较 HDF 建模的 0.63cm 进一步收敛——汇合口
+长度按 g01 文件顺序对应入流河段）。
+
 ## v1 已知局限（二期计划）
 
 - 无桥/涵/堰等建筑物（二期）
 - 河网仅支持亚临界过汇合口；超临界过汇合口需动量法（二期）
-- junction 长度目前需人工给定（g01 解析器自动读取在二期）
+- g01 导入暂不支持桥涵等建筑物节点（type≠1 自动跳过并告警）
 - 无无效流动区（ineffective flow areas）（二期）
 - 无 HEC-RAS 几何文件（.g01）导入器（二期，格式已勘察）
 - 复式断面多重临界水深取最浅解，与 HEC-RAS 比能最小法可能略有差异

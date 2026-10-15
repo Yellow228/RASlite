@@ -17,78 +17,47 @@ import os
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "src"))
 
-from raslite import CrossSection, Reach, Junction, SteadyNetwork
-from raslite.hecras_hdf import read_plan_hdf, read_flow_file, CFS
+from raslite import SteadyNetwork
+from raslite.g01 import parse_g01, build_network, read_prj_units
+from raslite.hecras_hdf import read_plan_hdf, read_flow_file
 
 BASE = os.path.join(HERE, "..", "examples", "1D Steady Flow Hydraulics",
                     "Chapter 4 Example Data")
 HDF = os.path.join(BASE, "EX1.p01.hdf")
 F01 = os.path.join(BASE, "EX1.f01")
-
-FT = 0.3048
+G01 = os.path.join(BASE, "EX1.g01")
+PRJ = os.path.join(BASE, "EX1.prj")
 
 
 def build(profile_flows):
-    """profile_flows: (q_upper, q_butte, q_lower_at_979, q_lower_at_96) cfs"""
-    qu, qb, ql1, ql2 = profile_flows  # 已是 SI (cms)
+    """profile_flows: {reach_full_name: [q,...]} 已是 SI (cms)。
+    几何全部来自 .g01 导入器 (含汇合口长度), 结果对比仍用 HDF。"""
+    unit = read_prj_units(PRJ)
+    g01_reaches, g01_junctions = parse_g01(G01, unit=unit)
+    net = build_network(g01_reaches, g01_junctions,
+                        outlet=("Fall River", "Lower Reach"),
+                        boundary=("normal", 0.0004))
+    for name, qs in profile_flows.items():
+        net.reaches[name].q = qs
+
     sections, hdf_profiles, meta = read_plan_hdf(HDF)
-    f_profiles, flows, bnds = read_flow_file(F01)
-
-    def mk(sec):
-        cs = CrossSection(
-            name=f"{sec.river}/{sec.reach}@{sec.rs}",
-            points=sec.points,
-            bank_left=sec.bank_left, bank_right=sec.bank_right,
-            n_main=sec.n_main, n_left=sec.n_left, n_right=sec.n_right,
-            reach_lengths=sec.reach_lengths,
-            c_contract=sec.c_contract, c_expand=sec.c_expand,
-        )
-        return cs
-
-    def reach_of(river, reach_name, q):
-        ss = sorted([s for s in sections
-                     if s.river == river and s.reach == reach_name],
-                    key=lambda s: -float(s.rs))
-        cs_list = [mk(s) for s in ss]
-        # chainage: 自上游向下游累计 (沿流向递增)
-        c = 0.0
-        for cs, s in zip(cs_list, ss):
-            cs.chainage = c
-            c += s.reach_lengths[1]
-        return Reach(f"{river}/{reach_name}", cs_list, q=q)
-
-    upper = reach_of("Fall River", "Upper Reach", qu)
-    butte = reach_of("Butte Cr.", "Tributary", qb)
-    lower = reach_of("Fall River", "Lower Reach", [ql1, ql1, ql2, ql2])
-
-    junc = Junction("Sutter",
-                    inflows={"Fall River/Upper Reach": 60 * FT,
-                             "Butte Cr./Tributary": 50 * FT},
-                    outflow="Fall River/Lower Reach")
-
-    net = SteadyNetwork(
-        reaches={"Fall River/Upper Reach": upper,
-                 "Butte Cr./Tributary": butte,
-                 "Fall River/Lower Reach": lower},
-        junctions=[junc],
-        outlet_reach="Fall River/Lower Reach",
-        boundary=("normal", bnds[("Fall River", "Lower Reach")]["dn_slope"]),
-    )
-    # HDF 结果映射: {(river, reach, rs): results}
     ref = {}
     for s in sections:
         ref[(s.river, s.reach, s.rs)] = s.results
-    return net, ref, f_profiles, hdf_profiles, upper, butte, lower
+    upper = net.reaches["Fall River/Upper Reach"]
+    butte = net.reaches["Butte Cr./Tributary"]
+    lower = net.reaches["Fall River/Lower Reach"]
+    return net, ref, hdf_profiles, upper, butte, lower
 
 
 def main():
-    sections0, hdf_profiles, meta = read_plan_hdf(HDF)
+    hdf_profiles = read_plan_hdf(HDF)[1]
     f_profiles, flows, bnds = read_flow_file(F01)
 
     report = []
     report.append("# L2 验证: 河网 + Junction — raslite vs HEC-RAS (EX1 全模型)\n")
     report.append("- 河网: Butte Cr.(3断面) + Fall River Upper(3) → Junction Sutter")
-    report.append("  → Fall River Lower(4);汇合口长度 Upper 60ft / Butte 50ft")
+    report.append("  → Fall River Lower(4);几何与汇合口长度均来自 EX1.g01 导入器")
     report.append("- 流量: 每剖面按 EX1.f01 重建 (Upper 500/2000/5000, Butte 100/500/1500,")
     report.append("  Lower 600/2500/6500 → 650/2700/7000 cfs)")
     report.append("- 边界: Lower Reach 末断面正常水深 S0=0.0004;单位 SI\n")
@@ -96,11 +65,17 @@ def main():
     grand_max = 0.0
     for ip, pname in enumerate(f_profiles):
         hname = hdf_profiles[ip]
-        pf = (flows[("Fall River", "Upper Reach", "10")][ip],
-              flows[("Butte Cr.", "Tributary", "0.2")][ip],
-              flows[("Fall River", "Lower Reach", "9.79")][ip],
-              flows[("Fall River", "Lower Reach", "9.6")][ip])
-        net, ref, _, _, upper, butte, lower = build(pf)
+        qmap = {
+            "Fall River/Upper Reach": flows[("Fall River", "Upper Reach", "10")][ip],
+            "Butte Cr./Tributary": flows[("Butte Cr.", "Tributary", "0.2")][ip],
+            "Fall River/Lower Reach": [
+                flows[("Fall River", "Lower Reach", "9.79")][ip],
+                flows[("Fall River", "Lower Reach", "9.79")][ip],
+                flows[("Fall River", "Lower Reach", "9.6")][ip],
+                flows[("Fall River", "Lower Reach", "9.6")][ip],
+            ],
+        }
+        net, ref, _, upper, butte, lower = build(qmap)
         results = net.run_subcritical()
 
         report.append(f"## 剖面 {pname}\n")
