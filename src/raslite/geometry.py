@@ -133,7 +133,7 @@ class CrossSection:
     def __init__(self, name, points, bank_left, bank_right, n_main,
                  n_left=None, n_right=None,
                  reach_lengths=(0.0, 0.0, 0.0),
-                 c_contract=0.1, c_expand=0.3):
+                 c_contract=0.1, c_expand=0.3, levees=None):
         self.name = name
         pts = sorted((float(s), float(z)) for s, z in points)
         if len(pts) < 2:
@@ -149,6 +149,8 @@ class CrossSection:
             raise ValueError(f"{name}: 滩肩站距超出断面范围")
         self.bank_left = float(bank_left)
         self.bank_right = float(bank_right)
+        self.levees = [(-1 if side < 0 else 1, float(sta), float(elev))
+                       for side, sta, elev in (levees or [])]
         self.n_main = float(n_main)
         self.z_min = min(z for _, z in self.points)
         self.z_max = max(z for _, z in self.points)
@@ -213,6 +215,29 @@ class CrossSection:
 
     # ---------- 水力属性 ----------
 
+    def _effective_points(self, ws: float):
+        """按堤防规则截断断面点。
+
+        HEC-RAS 规则: 水位低于堤顶时, 堤后 (背水侧) 地面点全部剔除,
+        断面以堤防站距 + 堤顶高程作为端点 (水被挡在堤前);
+        水位达到堤顶后恢复全断面。side: -1=左堤 (堤后在左), +1=右堤。
+        """
+        if not self.levees:
+            return self.points
+        pts = list(self.points)
+        for side, sta, elev in self.levees:
+            if ws >= elev:
+                continue
+            if side < 0:
+                front = [(x, z) for (x, z) in pts if x > sta + _EPS]
+                if front:
+                    pts = [(sta, elev)] + front
+            else:
+                front = [(x, z) for (x, z) in pts if x < sta - _EPS]
+                if front:
+                    pts = front + [(sta, elev)]
+        return pts
+
     def props(self, ws: float) -> SectionProps:
         """计算给定水面高程下的断面水力属性。"""
         if ws <= self.z_min:
@@ -224,10 +249,11 @@ class CrossSection:
         top_t = 0.0
         moment = 0.0          # ∫ (ws - z)^2 /2 * ... -> ∫ h^2 dx (用于形心)
 
-        n_pts = len(self.points)
+        points = self._effective_points(ws)
+        n_pts = len(points)
         for i in range(n_pts - 1):
-            x1, z1 = self.points[i]
-            x2, z2 = self.points[i + 1]
+            x1, z1 = points[i]
+            x2, z2 = points[i + 1]
             h1, h2 = ws - z1, ws - z2
             dx = x2 - x1
             if h1 <= 0.0 and h2 <= 0.0:
@@ -261,15 +287,15 @@ class CrossSection:
                 moment += dw * hw * hw / 3.0
 
         # 断面两端竖直端墙 (计入总湿周与所属分区湿周)
-        z_l, z_r = self.points[0][1], self.points[-1][1]
+        z_l, z_r = points[0][1], points[-1][1]
         if ws > z_l:
             h = ws - z_l
-            label, n = self._subdivision_of(self.x_min)
+            label, n = self._subdivision_of(points[0][0])
             subs[(label, n)].perimeter += h
             perim_t += h
         if ws > z_r:
             h = ws - z_r
-            label, n = self._subdivision_of(self.x_max)
+            label, n = self._subdivision_of(points[-1][0])
             subs[(label, n)].perimeter += h
             perim_t += h
 

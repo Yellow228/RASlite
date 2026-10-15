@@ -56,6 +56,7 @@ class G01Section:
     c_contract: float
     c_expand: float
     description: str = ""
+    levees: list = field(default_factory=list)   # [(side, sta, elev)]
 
     def to_cross_section(self, name: str) -> CrossSection:
         return CrossSection(
@@ -64,6 +65,7 @@ class G01Section:
             n_main=self.n_main, n_left=self.n_left, n_right=self.n_right,
             reach_lengths=self.reach_lengths,
             c_contract=self.c_contract, c_expand=self.c_expand,
+            levees=self.levees,
         )
 
 
@@ -193,6 +195,19 @@ def parse_g01(path: str, unit: str = "ft"):
                 p = line.split("=", 1)[1].split(",")
                 cur_node.bank_left = float(p[0]) * L
                 cur_node.bank_right = float(p[1]) * L
+                continue
+            if cur_node is not None and line.startswith("Levee="):
+                # 格式: LF,Sta,Elev,RF,Sta,Elev (flag 0=无堤; -1/1=有堤)
+                p = [t.strip() for t in line.split("=")[1].split(",")]
+                for flag_i, sta_i, elev_i, side in ((0, 1, 2, -1),
+                                                    (3, 4, 5, 1)):
+                    if flag_i < len(p) and p[flag_i] not in ("", "0"):
+                        try:
+                            cur_node.levees.append(
+                                (side, float(p[sta_i]) * L,
+                                 float(p[elev_i]) * L))
+                        except (ValueError, IndexError):
+                            pass
                 continue
             if cur_node is not None and line.startswith("Exp/Cntr="):
                 p = line.split("=", 1)[1].split(",")
