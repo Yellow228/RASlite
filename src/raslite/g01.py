@@ -117,6 +117,15 @@ def parse_g01(path: str, unit: str = "ft"):
                 pass
         return out
 
+    def _nums8(line):
+        """HEC-RAS 数组行为 8 字符定宽字段; 相邻数字可能粘连
+        (如 '43.5611004.059'), 按定宽切分, 失败时回退空白切分。"""
+        chunks = [line[i:i + 8] for i in range(0, len(line), 8)]
+        try:
+            return [float(c) for c in chunks if c.strip()]
+        except ValueError:
+            return _nums(line)
+
     def _flush_node():
         nonlocal cur_node, se_count, se_read, mann_count, mann_read
         nonlocal mann_buf, se_buf
@@ -192,7 +201,7 @@ def parse_g01(path: str, unit: str = "ft"):
                 continue
 
             if se_count and se_read < se_count * 2:
-                vals = _nums(line)
+                vals = _nums8(line)
                 take = min(len(vals), se_count * 2 - se_read)
                 se_buf.extend(vals[:take])
                 se_read += take
@@ -200,7 +209,7 @@ def parse_g01(path: str, unit: str = "ft"):
                     se_count = 0
                 continue
             if mann_count and mann_read < mann_count * 3:
-                vals = _nums(line)
+                vals = _nums8(line)
                 take = min(len(vals), mann_count * 3 - mann_read)
                 mann_buf.extend(vals[:take])
                 mann_read += take

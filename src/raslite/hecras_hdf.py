@@ -202,7 +202,8 @@ def read_flow_file(path: str, to_si: bool = True):
     返回 (profiles, flows, boundaries):
       profiles   : [str] 剖面名
       flows      : {(river, reach, rs): [q, ...]} 各位置逐剖面流量 (SI)
-      boundaries : {(river, reach): {'up_type', 'dn_type', 'dn_slope', ...}}
+      boundaries : {(river, reach): [ {'up_type','dn_type','dn_slope',
+                     'dn_known_ws',...}, ... ]}  按剖面顺序
     """
     import re
     Q = CFS if to_si else 1.0
@@ -226,13 +227,16 @@ def read_flow_file(path: str, to_si: bool = True):
             elif line.startswith("Boundary for River Rch & Prof#="):
                 parts = [p.strip() for p in line.split("=", 1)[1].split(",")]
                 key = (parts[0], parts[1])
-                cur_bnd = boundaries.setdefault(key, {})
+                cur_bnd = {}
+                boundaries.setdefault(key, []).append(cur_bnd)
             elif line.startswith("Up Type=") and cur_bnd is not None:
                 cur_bnd["up_type"] = int(line.split("=")[1])
             elif line.startswith("Up Slope=") and cur_bnd is not None:
                 cur_bnd["up_slope"] = float(line.split("=")[1])
             elif line.startswith("Dn Type=") and cur_bnd is not None:
                 cur_bnd["dn_type"] = int(line.split("=")[1])
+            elif line.startswith("Dn Known WS=") and cur_bnd is not None:
+                cur_bnd["dn_known_ws"] = float(line.split("=")[1])
             elif line.startswith("Dn Slope=") and cur_bnd is not None:
                 cur_bnd["dn_slope"] = float(line.split("=")[1])
     # 去掉非流量的杂散行 (如 Profile Names 行残留)
